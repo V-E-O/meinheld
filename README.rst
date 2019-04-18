@@ -2,6 +2,8 @@ What's this
 ---------------------------------
 
 .. image:: https://scan.coverity.com/projects/2334/badge.svg
+    :target: https://scan.coverity.com/projects/v-e-o-meinheld
+
 .. image:: https://travis-ci.org/mopemope/meinheld.svg
     :target: https://travis-ci.org/mopemope/meinheld
 
