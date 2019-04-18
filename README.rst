@@ -1,6 +1,9 @@
 What's this
 ---------------------------------
 
+.. image:: https://travis-ci.org/mopemope/meinheld.svg
+    :target: https://travis-ci.org/mopemope/meinheld
+
 This is a high performance python wsgi web server.
 
 Thus this is yet an another asynchronous web server like gevent.
@@ -12,7 +15,7 @@ You can also join us in `meinheld mailing list`_ and `#meinheld`_ on freenode_
 Requirements
 ---------------------------------
 
-meinheld requires **Python 2.x >= 2.6** or **Python 3.x >= 3.2** . and **greenlet == 0.4.0**.
+meinheld requires **Python 2.x >= 2.6** or **Python 3.x >= 3.2** . and **greenlet >= 0.4.5**.
 
 meinheld supports Linux, FreeBSD, Mac OS X.
 
@@ -21,7 +24,7 @@ Installation
 
 Install from pypi::
 
-  $ easy_install -ZU meinheld
+  $ pip install -U meinheld
 
 Install from source:: 
 
@@ -29,22 +32,24 @@ Install from source::
 
 meinheld supports gunicorn.
 
-To install gunicorn (only python 2.x)::
+To install gunicorn::
 
-  $ easy_install -ZU gunicorn
+  $ pip install -U gunicorn
 
 
 Basic Usage
 ---------------------------------
 
-simple wsgi app::
+simple wsgi app:
+
+.. code:: python
 
     from meinheld import server
 
     def hello_world(environ, start_response):
-        status = '200 OK'
-        res = "Hello world!"
-        response_headers = [('Content-type','text/plain'),('Content-Length',str(len(res)))]
+        status = b'200 OK'
+        res = b"Hello world!"
+        response_headers = [('Content-type', 'text/plain'), ('Content-Length', str(len(res)))]
         start_response(status, response_headers)
         return [res]
 
@@ -65,7 +70,9 @@ To enable continuations, use ContinuationMiddleware. get Continuation from wsgi 
 
 Continuation objects have two very interesting methods, `suspend` and `resume`.
 
-For example::
+For example:
+
+.. code:: python
 
     from meinheld import server
     from meinheld import middleware
@@ -100,7 +107,9 @@ Websocket
 
 meinheld support Websockets. use WebSocketMiddleware. 
 
-For example::
+For example:
+
+.. code:: python
 
     from flask import Flask, render_template, request
     from meinheld import server, middleware
@@ -154,8 +163,10 @@ Socket
 
 This patch replaces the standard socket module.
 
-For Example::
-    
+For Example:
+
+.. code:: python
+
     from meinheld import patch
     patch.patch_all()
 
@@ -182,6 +193,3 @@ meinheld uses sendfile(2), over wgsi.file_wrapper.
 .. _meinheld mailing list: http://groups.google.com/group/meinheld
 .. _`#meinheld`: http://webchat.freenode.net/?channels=meinheld
 .. _freenode: http://freenode.net
-
-
-

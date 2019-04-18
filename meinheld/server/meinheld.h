@@ -31,7 +31,7 @@
 
 #include "http_parser.h"
 
-#define SERVER "meinheld/0.5.5"
+#define SERVER "meinheld/0.6.1"
 #define MODULE_NAME "meinheld.server"
 
 #ifdef DEVELOP
@@ -131,4 +131,3 @@ as_str(PyObject* obj)
 
 
 #endif
-

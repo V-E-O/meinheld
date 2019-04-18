@@ -1,6 +1,43 @@
+0.6.1
+=======
+(Bug fix release 2016-11-02)
+
+* Fix: decode PATH_INFO as latin1
+
+0.6.0
+=======
+(Release 2016-10-19)
+
+* Improve: Use EPOLLEXCLUSIVE, Improve multi process performance (Linux Kernel >= 4.5)
+* Improve: Improve performance gunicorn worker
+
+0.5.9
+=======
+(Bug fix Release, Release 2016-03-04)
+
+* Fix: segfault when bad request
+
+0.5.8
+=======
+(Bug fix Release, Release 2015-09-16)
+
+* Fix: Read temporary file binary mode
+
+0.5.7
+=======
+(Bug fix Release, Release 2014-12-17)
+
+* Fix: Support Only Greenlet 0.4.5
+
+0.5.6
+=======
+(Bug fix Release, Release 2014-03-26)
+
+* Fix: Support Python 3.4
+
 0.5.4
 =======
-(Bug Release, Release 2013-03-11)
+(Bug fix Release, Release 2013-03-11)
 
 * Fix: Invalid signal callback
 
@@ -14,7 +51,7 @@
 =======
 (bug fix release, release 2012-10-17)
 
-* Fix: some memory leak 
+* Fix: some memory leak
 * Fix: add sleep API
 
 0.5.1
@@ -40,7 +77,7 @@
 =======
 (bug fix release, release 2012-6-10)
 
-* Fix: Stop server silent 
+* Fix: Stop server silent
 
 0.4.14
 =======
@@ -48,7 +85,7 @@
 
 * Fix: Fix greenlet version 0.3.4
 * Fix: graceful reload for gunicorn
-* Improve: Enabled set existing socket to listen function. (use keyword args "socket_fd") 
+* Improve: Enabled set existing socket to listen function. (use keyword args "socket_fd")
 
 0.4.13
 =======
@@ -100,7 +137,7 @@
 
 * Add get_ident. instead of werkzeug.local.get_ident
 * Change read timeout value(30sec)
-* Add client_body_buffer_size 
+* Add client_body_buffer_size
 
 0.4.5
 =======
@@ -148,7 +185,7 @@
 * add io trampoline
 * support greening socket
 * monkeypatchi utility
-* embed greenlet 
+* embed greenlet
 * rename SpawnMiddleware -> ContinuationMiddleware
 
 
@@ -196,7 +233,7 @@
 * update http parser
 * change max header num and size
 * fix finally call response close
-* add gunicorn worker entry point 
+* add gunicorn worker entry point
 * various bug fixes
 
 0.2
@@ -204,4 +241,3 @@
 
 * support greenlet continuation (use greenlet C/API. suspend and resume support)
 * add client object to wsgi environ
-

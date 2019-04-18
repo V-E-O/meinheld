@@ -85,6 +85,7 @@ static PyObject *empty_string = NULL; //""
 static PyObject *app_handler_func = NULL;
 
 /* gunicorn */
+static time_t watchdog_lasttime;
 static int spinner = 0;
 static int tempfile_fd = 0;
 static int gtimeout = 0;
@@ -165,13 +166,13 @@ realloc_pendings(void)
 static void
 destroy_pendings(void)
 {
+    int i = 0, len;
+    TimerObject *timer = NULL;
+    TimerObject **t = g_pendings->q;
     if (g_pendings == NULL) {
         return;
     }
-    int i = 0; 
-    int len = g_pendings->size;
-    TimerObject *timer = NULL;
-    TimerObject **t = g_pendings->q;
+    len = g_pendings->size;
     t += i;
 
     while(len--) {
@@ -244,6 +245,7 @@ new_client_t(int client_fd, char *remote_addr, uint32_t remote_port)
     //memset(client, 0, sizeof(client_t));
 
     client->fd = client_fd;
+    client->complete = 1;
     client->request_queue = new_request_queue();
     client->remote_addr = remote_addr;
     client->remote_port = remote_port;
@@ -256,22 +258,22 @@ static void
 set_log_value(client_t *client, PyObject *environ, uintptr_t delta_msec)
 {
     PyObject *status_code = NULL, *bytes = NULL, *request_time = NULL, *local_time = NULL;
-    
+
     status_code = PyLong_FromLong(client->status_code);
     bytes = PyLong_FromLong(client->write_bytes);
     request_time = PyLong_FromLong(delta_msec);
     local_time = NATIVE_FROMSTRING((char*)http_log_time);
-    
+
     if (status_code) {
         PyDict_SetItem(environ, status_code_key, status_code);
         Py_DECREF(status_code);
     }
-    
+
     if (bytes) {
         PyDict_SetItem(environ, bytes_sent_key, bytes);
         Py_DECREF(bytes);
     }
-    
+
     if (request_time) {
         PyDict_SetItem(environ, request_time_key, request_time);
         Py_DECREF(request_time);
@@ -281,7 +283,6 @@ set_log_value(client_t *client, PyObject *environ, uintptr_t delta_msec)
         PyDict_SetItem(environ, local_time_key, local_time);
         Py_DECREF(local_time);
     }
-
 }
 
 static void
@@ -291,7 +292,7 @@ clean_client(client_t *client)
     uintptr_t end, delta_msec = 0;
 
     request *req = client->current_req;
-   
+
     if (is_write_access_log) {
         DEBUG("write access log");
         cache_time_update();
@@ -322,7 +323,7 @@ clean_client(client_t *client)
     }
 
     DEBUG("status_code:%d env:%p", client->status_code, req->environ);
-    if (req->environ) { 
+    if (req->environ) {
         /* PyDict_Clear(client->environ); */
         /* DEBUG("CLEAR environ"); */
         Py_CLEAR(req->environ);
@@ -468,7 +469,7 @@ kill_server(int timeout)
             }
 
         } else {
-            //TODO WARN???   
+            //TODO WARN???
         }
         Py_DECREF(item);
     }
@@ -576,7 +577,7 @@ app_handler(PyObject *self, PyObject *args)
             // switch to hub
             current = pyclient->greenlet;
             parent = greenlet_getparent(current);
-        
+
             /* Py_INCREF(hub_switch_value); */
             res = greenlet_switch(parent, hub_switch_value, NULL);
             Py_XDECREF(res);
@@ -712,7 +713,6 @@ call_wsgi_handler(client_t *client)
 #ifdef WITH_GREENLET
     //new greenlet
     greenlet = greenlet_new(handler, NULL);
-    Py_DECREF(greenlet_getparent(greenlet));
     // set_greenlet
     pyclient->greenlet = greenlet;
     Py_INCREF(pyclient->greenlet);
@@ -791,14 +791,14 @@ trampoline_callback(picoev_loop* loop, int fd, int events, void* cb_arg)
         activecnt--;
         DEBUG("activecnt:%d", activecnt);
     }
-    
+
     YDEBUG("call trampoline_callback fd:%d event:%d cb_arg:%p", fd, events, cb_arg);
     o = (PyObject*)cb_arg;
 
     if (CheckClientObject(o)) {
         pyclient = (ClientObject*)cb_arg;
         client = pyclient->client;
-        
+
         if ((events & PICOEV_TIMEOUT) != 0) {
 
             RDEBUG("** trampoline_callback timeout **");
@@ -894,9 +894,9 @@ set_input_file(client_t *client)
     FILE *tmp = (FILE *)req->body;
     fflush(tmp);
     rewind(tmp);
-    
+
     fd = fileno(tmp);
-    input = PyFile_FromFd(fd, "<tmpfile>", "r", -1, NULL, NULL, NULL, 1);
+    input = PyFile_FromFd(fd, "<tmpfile>", "rb", -1, NULL, NULL, NULL, 1);
     if (input == NULL) {
         fclose(tmp);
         req->body = NULL;
@@ -959,7 +959,7 @@ set_input_object(client_t *client)
 }
 
 /*
-static void 
+static void
 setting_keepalive(client_t *client)
 {
     PyObject *c;
@@ -1002,7 +1002,7 @@ prepare_call_wsgi(client_t *client)
     request *req = NULL;
 
     set_current_request(client);
-    
+
     req = client->current_req;
 
     //check Expect
@@ -1019,7 +1019,7 @@ prepare_call_wsgi(client_t *client)
             return -1;
         }
     }
-    
+
     if (!is_keep_alive) {
         client->keep_alive = 0;
     }
@@ -1041,8 +1041,11 @@ set_read_error(client_t *client, int status_code)
         //finish = 1
         return 1;
     } else {
-        client->status_code = status_code;
-        send_error_page(client);
+        if (!client->complete) {
+            // read error while reading request.
+            client->status_code = status_code;
+            send_error_page(client);
+        } // else keepalive timeout. should not send any data.
         close_client(client);
         return -1;
     }
@@ -1137,16 +1140,12 @@ parse_http_request(int fd, client_t *client, char *buf, ssize_t r)
         if (parse_new_protocol(req, buf, r, nread) == -1) {
             return set_read_error(client, req->bad_request_code);
         }
-    } else {
-        if (nread != r || req->bad_request_code > 0) {
-            if (req == NULL) {
-                DEBUG("fd %d bad_request code 400", fd);
-                return set_read_error(client, 400);
-            } else {
-                DEBUG("fd %d bad_request code %d", fd,  req->bad_request_code);
-                return set_read_error(client, req->bad_request_code);
-            }
-        }
+    } else if (req == NULL) {
+        DEBUG("fd %d bad_request code 400", fd);
+        return set_read_error(client, 400);
+    } else if (nread != r || req->bad_request_code > 0) {
+        DEBUG("fd %d bad_request code %d", fd,  req->bad_request_code);
+        return set_read_error(client, req->bad_request_code);
     }
 
     if (parser_finish(client) > 0) {
@@ -1169,7 +1168,7 @@ read_request(picoev_loop *loop, int fd, client_t *client, char call_time_update)
     r = read(client->fd, buf, sizeof(buf));
     Py_END_ALLOW_THREADS
     switch (r) {
-        case 0: 
+        case 0:
             return set_read_error(client, 503);
         case -1:
             // Error
@@ -1242,7 +1241,7 @@ accept_callback(picoev_loop* loop, int fd, int events, void* cb_arg)
         int i;
         socklen_t client_len = sizeof(client_addr);
         for (i=0; i<8; ++i) {
-#if linux
+#if linux && defined(SOCK_NONBLOCK) && defined(SOCK_CLOEXEC)
             client_fd = accept4(fd, (struct sockaddr *)&client_addr, &client_len, SOCK_NONBLOCK | SOCK_CLOEXEC);
 #else
             client_fd = accept(fd, (struct sockaddr *)&client_addr, &client_len);
@@ -1299,14 +1298,14 @@ setup_server_env(void)
     cache_time_init();
     setup_static_env(server_name, server_port);
     setup_start_response();
-    
+
     ClientObject_list_fill();
     client_t_list_fill();
     parser_list_fill();
     request_list_fill();
     buffer_list_fill();
     InputObject_list_fill();
-    
+
     client_key = NATIVE_FROMSTRING("meinheld.client");
     wsgi_input_key = NATIVE_FROMSTRING("wsgi.input");
     status_code_key = NATIVE_FROMSTRING("STATUS_CODE");
@@ -1324,7 +1323,7 @@ clear_server_env(void)
     clear_static_env();
     client_t_list_clear();
     parser_list_clear();
-    
+
     ClientObject_list_clear();
     request_list_clear();
     buffer_list_clear();
@@ -1340,7 +1339,7 @@ clear_server_env(void)
 }
 
 
-static int 
+static int
 inet_listen(void)
 {
     struct addrinfo hints, *servinfo, *p;
@@ -1349,14 +1348,14 @@ inet_listen(void)
     char strport[7];
     int listen_sock = 0;
     PyObject *fd = NULL;
-    
+
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
-    hints.ai_flags = AI_PASSIVE; 
-    
+    hints.ai_flags = AI_PASSIVE;
+
     snprintf(strport, sizeof (strport), "%d", server_port);
-    
+
     if ((res = getaddrinfo(server_name, strport, &hints, &servinfo)) == -1) {
         PyErr_SetFromErrno(PyExc_IOError);
         return -1;
@@ -1396,8 +1395,8 @@ inet_listen(void)
     }
 
     freeaddrinfo(servinfo); // all done with this structure
-    
-    // BACKLOG 
+
+    // BACKLOG
     Py_BEGIN_ALLOW_THREADS
     res = listen(listen_sock, backlog);
     Py_END_ALLOW_THREADS
@@ -1411,7 +1410,7 @@ inet_listen(void)
     fd =  PyLong_FromLong((long) listen_sock);
 #else
     fd =  PyInt_FromLong((long) listen_sock);
-#endif 
+#endif
     listen_socks = PyList_New(0);
     if (PyList_Append(listen_socks, fd) == -1) {
         return -1;
@@ -1496,7 +1495,7 @@ unix_listen(char *sock_name, int len)
     fd =  PyLong_FromLong((long) listen_sock);
 #else
     fd =  PyInt_FromLong((long) listen_sock);
-#endif 
+#endif
     listen_socks = PyList_New(0);
     if (PyList_Append(listen_socks, fd) == -1) {
         return -1;
@@ -1515,7 +1514,7 @@ fast_notify(void)
         tempfile_fd = 0;
     }
 }
-static PyObject* 
+static PyObject*
 set_listen_socket(PyObject *temp)
 {
     if (listen_socks != NULL) {
@@ -1584,7 +1583,7 @@ meinheld_listen(PyObject *self, PyObject *args, PyObject *kwds)
         //error
         return NULL;
     }
-    
+
     Py_RETURN_NONE;
 }
 
@@ -1612,7 +1611,7 @@ meinheld_access_log(PyObject *self, PyObject *args)
     if (!PyArg_ParseTuple(args, "O:access_logger", &o)) {
         return NULL;
     }
-   
+
     if (o == Py_None) {
         is_write_access_log = 0;
         set_access_logger(NULL);
@@ -1652,7 +1651,7 @@ meinheld_error_log(PyObject *self, PyObject *args)
     if (func == NULL) {
         return NULL;
     }
-    
+
     if (!PyCallable_Check(func)) {
         PyErr_SetString(PyExc_TypeError, "must be callable");
         return NULL;
@@ -1748,12 +1747,12 @@ listen_all_sockets(void)
     int ret = 0;
 
     iter = PyObject_GetIter(listen_socks);
-    
+
     if (PyErr_Occurred()){
         call_error_logger();
         return -1;
     }
-    
+
     DEBUG("socks iter %p", iter);
     DEBUG("socks size %d", PyList_Size(listen_socks));
 
@@ -1778,13 +1777,13 @@ listen_all_sockets(void)
 }
 
 static int
-close_all_sockets(void) 
+close_all_sockets(void)
 {
     PyObject *iter = NULL, *item = NULL;
     int listen_sock = 0;
-    
+
     iter = PyObject_GetIter(listen_socks);
-    
+
     if (PyErr_Occurred()){
         call_error_logger();
         return -1;
@@ -1858,7 +1857,8 @@ meinheld_run_loop(PyObject *self, PyObject *args, PyObject *kwds)
             catch_signal = 0;
             kill_server(0);
         }
-        if (watch_loop) {
+        if (watch_loop && watchdog_lasttime != main_loop->now) {
+            watchdog_lasttime = main_loop->now;
             if (tempfile_fd) {
                 fast_notify();
             } else if (watchdog) {
@@ -1875,8 +1875,8 @@ meinheld_run_loop(PyObject *self, PyObject *args, PyObject *kwds)
     }
 
     Py_DECREF(wsgi_app);
-    Py_XDECREF(watchdog);
-    
+    Py_CLEAR(watchdog);
+
     current_client = NULL;
     picoev_destroy_loop(main_loop);
     picoev_deinit();
@@ -2025,6 +2025,7 @@ meinheld_set_fastwatchdog(PyObject *self, PyObject *args)
     if (!PyArg_ParseTuple(args, "iii", &_fd, &_ppid, &timeout))
         return NULL;
 
+    watchdog_lasttime = 0;
     tempfile_fd = _fd;
     ppid = _ppid;
     gtimeout = timeout;
@@ -2043,8 +2044,10 @@ meinheld_set_watchdog(PyObject *self, PyObject *args)
         PyErr_SetString(PyExc_TypeError, "must be callable");
         return NULL;
     }
+    Py_INCREF(temp);
+    Py_XDECREF(watchdog);
+    watchdog_lasttime = 0;
     watchdog = temp;
-    Py_INCREF(watchdog);
     watch_loop = 1;
     Py_RETURN_NONE;
 }
@@ -2107,7 +2110,7 @@ meinheld_suspend_client(PyObject *self, PyObject *args)
         PyErr_SetString(PyExc_ValueError, "greenlet is not set");
         return NULL;
     }
-    
+
     /*
     if (pyclient->resumed == 1) {
         //call later
@@ -2270,7 +2273,7 @@ meinheld_trampoline(PyObject *self, PyObject *args, PyObject *kwargs)
             return NULL;
         }
     }
-    
+
     /*
     if (current_client == NULL) {
         //TODO Cheange Exception class and Messages
@@ -2278,7 +2281,7 @@ meinheld_trampoline(PyObject *self, PyObject *args, PyObject *kwargs)
         //PyErr_SetString(PyExc_ValueError, " WSGI Handler");
         return NULL;
     }*/
-   
+
     current = greenlet_getcurrent();
     pyclient = (ClientObject *) current_client;
     Py_DECREF(current);
@@ -2294,7 +2297,7 @@ meinheld_trampoline(PyObject *self, PyObject *args, PyObject *kwargs)
         current = pyclient->greenlet;
         parent = greenlet_getparent(current);
         YDEBUG("trampoline fd:%d event:%d current:%p parent:%p cb_arg:%p", fd, event, current, parent, pyclient);
-        
+
         /* Py_INCREF(hub_switch_value); */
         res = greenlet_switch(parent, hub_switch_value, NULL);
         return res;
@@ -2341,7 +2344,6 @@ meinheld_spawn(PyObject *self, PyObject *args, PyObject *kwargs)
     if (greenlet == NULL) {
         return NULL;
     }
-    Py_DECREF(greenlet_getparent(greenlet));
     res = internal_schedule_call(0, func, func_args, func_kwargs, greenlet);
     Py_XDECREF(res);
     DEBUG("greenlet refcnt:%d", (int)Py_REFCNT(greenlet));
@@ -2363,7 +2365,7 @@ meinheld_sleep(PyObject *self, PyObject *args, PyObject *kwargs)
     if (!PyArg_ParseTupleAndKeywords(args, kwargs, "i:sleep", keywords, &sec)) {
         return NULL;
     }
-    
+
     current = greenlet_getcurrent();
     parent = greenlet_getparent(current);
     Py_DECREF(current);
@@ -2423,7 +2425,7 @@ internal_schedule_call(int seconds, PyObject *cb, PyObject *args, PyObject *kwar
             return NULL;
         }
     }
-        
+
     activecnt++;
     return (PyObject*)timer;
 }

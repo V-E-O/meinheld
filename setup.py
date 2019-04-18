@@ -10,9 +10,15 @@ import os.path
 import platform
 import fnmatch
 
-
 develop = False
-# develop = True 
+if os.environ.get("MEINHELD_DEVELOP") == "1":
+    develop = True
+# develop = True
+
+nogreen = False
+if os.environ.get("MEINHELD_NOGREEN") == "1":
+    nogreen = True
+
 
 def read(name):
     return open(os.path.join(os.path.dirname(__file__), name)).read()
@@ -35,6 +41,10 @@ def get_picoev_file():
         poller_file = 'meinheld/server/picoev_kqueue.c'
     elif "FreeBSD" == platform.system():
         poller_file = 'meinheld/server/picoev_kqueue.c'
+    elif "NetBSD" == platform.system():
+        poller_file = 'meinheld/server/picoev_kqueue.c'
+    elif "SunOS" == platform.system():
+        poller_file = 'meinheld/server/picoev_select.c'
     else:
         print("Sorry, not support .")
         sys.exit(1)
@@ -53,8 +63,10 @@ def get_sources(path, ignore_files):
 
 check_platform()
 pypy = check_pypy()
-
 if pypy:
+    nogreen = True
+
+if nogreen:
     define_macros=[
             ("HTTP_PARSER_DEBUG", "0") ]
     install_requires=[]
@@ -62,7 +74,7 @@ else:
     define_macros=[
             ("WITH_GREENLET",None),
             ("HTTP_PARSER_DEBUG", "0") ]
-    install_requires=['greenlet>=0.4.0,<0.5']
+    install_requires=['greenlet>=0.4.5,<0.5']
 
 if develop:
     define_macros.append(("DEVELOP",None))
@@ -75,14 +87,14 @@ library_dirs=[]
 include_dirs=[]
 
 setup(name='meinheld',
-    version="0.5.5",
+    version="0.6.1",
     description="High performance asynchronous Python WSGI Web Server",
     long_description=read('README.rst'),
     author='yutaka matsubara',
     author_email='yutaka.matsubara@gmail.com',
     url='http://meinheld.org',
     license='BSD',
-    platforms='Linux, BSD, Darwin',
+    platforms='Linux, BSD, Darwin, SunOS',
     packages= ['meinheld'],
     install_requires=install_requires,
 
@@ -115,4 +127,3 @@ setup(name='meinheld',
         'Topic :: Internet :: WWW/HTTP :: WSGI :: Server'
     ],
 )
-

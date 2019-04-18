@@ -1,4 +1,5 @@
 #include "http_request_parser.h"
+#include "http_parser.h"
 #include "server.h"
 #include "response.h"
 #include "input.h"
@@ -98,6 +99,7 @@ static PyObject *http_method_get;
 static PyObject *http_method_head;
 static PyObject *http_method_post;
 static PyObject *http_method_put;
+static PyObject *http_method_patch;
 static PyObject *http_method_connect;
 static PyObject *http_method_options;
 static PyObject *http_method_trace;
@@ -270,7 +272,10 @@ set_query(PyObject *env, char *buf, int len)
     int c, ret, slen = 0;
     char *s0;
     PyObject *obj;
-
+#ifdef PY3
+    char *c2;
+    PyObject *v;
+#endif
     s0 = buf;
     while(len > 0){
         c = *buf++;
@@ -291,8 +296,8 @@ set_query(PyObject *env, char *buf, int len)
         
 #ifdef PY3
         //TODO CHECK ERROR 
-        char *c2 = PyBytes_AS_STRING(obj);
-        PyObject *v = PyUnicode_DecodeLatin1(c2, strlen(c2), NULL);
+        c2 = PyBytes_AS_STRING(obj);
+        v = PyUnicode_DecodeLatin1(c2, strlen(c2), NULL);
         ret = PyDict_SetItem(env, query_string_key, v);
         Py_DECREF(v);
 #else
@@ -344,25 +349,18 @@ set_path(PyObject *env, char *buf, int len)
     slen = t - s0;
     slen = urldecode(s0, slen);
 
-    obj = PyBytes_FromStringAndSize(s0, slen);
-    /* DEBUG("path:%.*s", (int)slen, PyBytes_AS_STRING(obj)); */
-
-    if(likely(obj != NULL)){
 #ifdef PY3
-        //TODO CHECK ERROR 
-        char *c2 = PyBytes_AS_STRING(obj);
-        PyObject *v = PyUnicode_DecodeUTF8(c2, strlen(c2), NULL);
-        PyDict_SetItem(env, path_info_key, v);
-        Py_DECREF(v);
+    obj = PyUnicode_DecodeLatin1(s0, slen, "strict");
 #else
-        PyDict_SetItem(env, path_info_key, obj);
+    obj = PyBytes_FromStringAndSize(s0, slen);
 #endif
+    if (likely(obj != NULL)) {
+        PyDict_SetItem(env, path_info_key, obj);
         Py_DECREF(obj);
         return slen;
-    }else{
+    } else {
         return -1;
     }
-
 }
 
 static PyObject*
@@ -466,10 +464,9 @@ message_begin_cb(http_parser *p)
 {
     request *req = NULL;
     PyObject *environ = NULL;
+    client_t *client = get_client(p);
 
     DEBUG("message_begin_cb");
-    
-    client_t *client = get_client(p);
 
     req = new_request();
     if(req == NULL){
@@ -494,7 +491,10 @@ header_field_cb(http_parser *p, const char *buf, size_t len)
 {
     request *req = get_current_request(p);
     PyObject *env = NULL, *obj = NULL;
-
+#ifdef PY3
+    char *c1, *c2;
+    PyObject *f, *v;
+#endif
     /* DEBUG("field key:%.*s", (int)len, buf); */
 
     if(req->last_header_element != FIELD){
@@ -505,10 +505,10 @@ header_field_cb(http_parser *p, const char *buf, size_t len)
         }
 #ifdef PY3
         //TODO CHECK ERROR 
-        char *c1 = PyBytes_AS_STRING(req->field);
-        PyObject *f = PyUnicode_DecodeLatin1(c1, strlen(c1), NULL);
-        char *c2 = PyBytes_AS_STRING(req->value);
-        PyObject *v = PyUnicode_DecodeLatin1(c2, strlen(c2), NULL);
+        c1 = PyBytes_AS_STRING(req->field);
+        f = PyUnicode_DecodeLatin1(c1, strlen(c1), NULL);
+        c2 = PyBytes_AS_STRING(req->value);
+        v = PyUnicode_DecodeLatin1(c2, strlen(c2), NULL);
         PyDict_SetItem(env, f, v);
         Py_DECREF(f);
         Py_DECREF(v);
@@ -602,8 +602,8 @@ url_cb(http_parser *p, const char *buf, size_t len)
 static int
 body_cb(http_parser *p, const char *buf, size_t len)
 {
-    DEBUG("body_cb");
     request *req = get_current_request(p);
+    DEBUG("body_cb");
 
     if(max_content_length < req->body_readed + len){
 
@@ -612,8 +612,9 @@ body_cb(http_parser *p, const char *buf, size_t len)
         return -1;
     }
     if(req->body_type == BODY_TYPE_NONE){
-        if(req->body_length == 0){
+        if(req->body_length == 0 && !(p->flags & F_CHUNKED)){
             //Length Required
+            DEBUG("set request code %d", 411);
             req->bad_request_code = 411;
             return -1;
         }
@@ -738,6 +739,9 @@ headers_complete_cb(http_parser *p)
         case HTTP_PUT:
             obj = http_method_put;
             break;
+        case HTTP_PATCH:
+            obj = http_method_patch;
+            break;
         case HTTP_CONNECT:
             obj = http_method_connect;
             break;
@@ -810,9 +814,8 @@ headers_complete_cb(http_parser *p)
 int
 message_complete_cb(http_parser *p)
 {
-    DEBUG("message_complete_cb");
-    
     client_t *client = get_client(p);
+    DEBUG("message_complete_cb");
     client->complete = 1;
     client->upgrade = p->upgrade;
 
@@ -855,11 +858,8 @@ init_parser(client_t *cli, const char *name, const short port)
 size_t
 execute_parse(client_t *cli, const char *data, size_t len)
 {
-    size_t ret = http_parser_execute(cli->http_parser, &settings, data, len);
-    //check new protocol
-    /* cli->upgrade = cli->http_parser->upgrade; */
-
-    return ret;
+    cli->complete = 0;
+    return http_parser_execute(cli->http_parser, &settings, data, len);
 }
 
 
@@ -930,6 +930,7 @@ setup_static_env(char *name, int port)
     http_method_head = NATIVE_FROMSTRING("HEAD");
     http_method_post = NATIVE_FROMSTRING("POST");
     http_method_put = NATIVE_FROMSTRING("PUT");
+    http_method_patch = NATIVE_FROMSTRING("PATCH");
     http_method_connect = NATIVE_FROMSTRING("CONNECT");
     http_method_options = NATIVE_FROMSTRING("OPTIONS");
     http_method_trace = NATIVE_FROMSTRING("TRACE");
@@ -997,6 +998,7 @@ clear_static_env(void)
     Py_DECREF(http_method_head);
     Py_DECREF(http_method_post);
     Py_DECREF(http_method_put);
+    Py_DECREF(http_method_patch);
     Py_DECREF(http_method_connect);
     Py_DECREF(http_method_options);
     Py_DECREF(http_method_trace);

@@ -1,8 +1,9 @@
 from meinheld import server
+import requests  # requests should not be pached
+import traceback
 from meinheld import patch
 patch.patch_all()
 import time
-import requests
 
 
 running = False
@@ -37,7 +38,7 @@ class ServerRunner(object):
         server.listen(("0.0.0.0", 8000))
         self.running = True
         if shutdown:
-            server.schedule_call(1, server.shutdown, 3)
+            server.schedule_call(2, server.shutdown, 3)
         if self.middleware:
             server.run(self.middleware(self.app))
         else:
@@ -58,6 +59,8 @@ class ClientRunner(object):
                 r = self.func()
                 self.receive_data = r
                 self.environ = self.app.environ
+            except:
+                traceback.print_exc()
             finally:
                 if self.shutdown:
                     server.shutdown(1)

@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
+from collections import OrderedDict
+import os
+import sys
 
 from base import *
 import requests
-import os
 
 ASSERT_RESPONSE = b"Hello world!"
 RESPONSE = [b"Hello ", b"world!"]
@@ -51,6 +53,17 @@ class IterErrApp(BaseApp):
 
         return [1]
 
+class UpgradeApp(BaseApp):
+
+    def __call__(self, environ, start_response):
+        status = '101 Switching Protocols'
+        response_headers = [('Upgrade', 'websocket')]
+        start_response(status, response_headers)
+        self.environ = environ.copy()
+        print(environ)
+
+        return []
+
 def test_check_key():
 
     def client():
@@ -87,7 +100,11 @@ def test_encode():
     
     env, res = run_client(client, App)
     assert(res.content == ASSERT_RESPONSE)
-    assert(env.get("PATH_INFO") == "/あいう")
+    path_info = env.get('PATH_INFO')
+    expected = "/あいう"  # utf-8
+    if sys.version_info[0] > 2:
+        expected = expected.encode('utf-8').decode('latin1')
+    assert(env.get("PATH_INFO") == expected)
     assert(env.get("QUERY_STRING") == None)
 
 
@@ -143,13 +160,26 @@ def test_headers():
 def test_post():
 
     def client():
-        payload = {'key1': 'value1', 'key2': 'value2'}
+        payload = OrderedDict([('key1', 'value1'), ('key2', 'value2')])
         return requests.post("http://localhost:8000/", data=payload)
 
     env, res = run_client(client, App)
     assert(res.status_code == 200)
     assert(res.content == ASSERT_RESPONSE)
-    assert(env.get("wsgi.input").read() == b"key2=value2&key1=value1")
+    assert(env.get("wsgi.input").read() == b"key1=value1&key2=value2")
+
+def gen():
+    yield b"key1=value1&key2=value2"
+
+def test_post_chunked():
+
+    def client():
+        return requests.post("http://localhost:8000/", data=gen())
+
+    env, res = run_client(client, App)
+    assert(res.status_code == 200)
+    assert(res.content == ASSERT_RESPONSE)
+    assert(env.get("wsgi.input").read() == b"key1=value1&key2=value2")
 
 def test_upload_file():
 
@@ -173,3 +203,20 @@ def test_error():
     assert(res.status_code == 500)
     assert(res.content == ASSERT_RESPONSE)
     assert(env.get("REQUEST_METHOD") == "GET")
+
+def test_upgrade():
+    """This server will assume the application will correctly set the
+    "Upgrade" header, and automatically set the "Connection" header to
+    "upgrade", instead of "keep-alive" or "close", for a response with
+    status "101 Switching Protocols". That is likely to better conform to
+    RFC 7230 (HTTP/1.1) and RFC 6455 (WebSocket).
+    """
+
+    def client():
+        return requests.get("http://localhost:8000")
+
+    env, res = run_client(client, UpgradeApp)
+    headers = res.headers
+    assert(res.status_code == 101)
+    assert(headers["upgrade"] == "websocket")
+    assert(headers["connection"] == "upgrade")
